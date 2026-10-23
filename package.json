@@ -1,0 +1,8 @@
+{
+  "name":"watershed-council-online",
+  "version":"1.0.0",
+  "private":true,
+  "type":"module",
+  "engines":{"node":">=24.0.0 <25"},
+  "scripts":{"build":"node --check game-worker.mjs","start":"node server.mjs"}
+}

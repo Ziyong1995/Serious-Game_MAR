@@ -1,0 +1,6 @@
+CREATE TABLE rooms (
+  code TEXT PRIMARY KEY NOT NULL,
+  state TEXT NOT NULL,
+  version INTEGER NOT NULL DEFAULT 1,
+  updated_at INTEGER NOT NULL
+);
