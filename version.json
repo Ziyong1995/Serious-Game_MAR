@@ -1,0 +1,12 @@
+{
+  "gameVersion": 3,
+  "sourceFile": "src/game.html",
+  "sourceSha256": "e8e73def8da0c815ab82ca41cb7ebc996e449b4d4dbdcc811346dc154bf3c97b",
+  "eventDeck": 34,
+  "playerSeats": [
+    3,
+    4,
+    5
+  ],
+  "spectators": true
+}

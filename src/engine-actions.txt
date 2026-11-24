@@ -1,0 +1,82 @@
+function requireValue(ok, message) { if (!ok) throw new Error(message); }
+function integer(v, max=100000) { requireValue(Number.isSafeInteger(v) && v >= 0 && v <= max, 'Invalid amount.'); return v; }
+function target(v, self) { integer(v, G.players.length-1); requireValue(v !== self, 'Choose another player.'); return v; }
+function validType(t) { requireValue(Object.hasOwn(TYPES,t), 'Unknown structure.'); return t; }
+function execute(state, pid, command) {
+  G = structuredClone(state);
+  const {act} = command;
+  requireValue(G.phase !== 'end', 'This game has ended.');
+  if (G.pending) {
+    const q=G.pending;
+    if (act==='accept' || act==='decline') {
+      requireValue(pid===q.to, 'Only the recipient can answer this offer.');
+      if(act==='accept') acceptPending();
+      else { log(`${P(pid).name} declined ${P(q.from).name}'s offer.`); G.pending=null; }
+    } else if(act==='cancelOffer') {
+      requireValue(pid===q.from, 'Only the sender can cancel this offer.');
+      log(`${P(pid).name} cancelled the offer.`); G.pending=null;
+    } else throw new Error('Wait for the offer to be answered, or cancel it.');
+  } else if (G.phase==='weather') {
+    requireValue(act==='draw' && pid===G.start, 'The starting player must draw the event card.');
+    drawEvent();
+  } else if (G.phase==='weatherResult') {
+    requireValue(act==='weatherContinue' && pid===G.start, 'The starting player continues after the weather.');
+    G.ti=0; G.cur=G.order[0]; G.phase='turn'; checkObjectives(curP(),false);
+  } else {
+    requireValue(G.phase==='turn' && pid===G.cur, 'It is not your turn.');
+    const p=curP();
+    switch(act) {
+      case 'build': { const t=validType(command.type); integer(command.tile,p.land.length-1); requireValue(canBuildOn(pid,t,command.tile),'This structure cannot be built on that tile.'); requireValue(p.money>=costFor(t,1),'Not enough money.'); build(t,command.tile); break; }
+      case 'swapObj': {
+        integer(command.uid); requireValue(p.objectives.some(o=>o.uid===command.uid),'This is not your objective.');
+        requireValue(!p.r.swapped && p.money>=2,'You may swap once per turn for 2 M.'); swapObjective(command.uid); break;
+      }
+      case 'upgrade': {
+        integer(command.id); const s=G.structs.find(s=>s.id===command.id);
+        requireValue(s && s.owners.includes(pid), 'You do not own that structure.');
+        requireValue(s.level<3 && p.money>=costFor(s.type,s.level+1), 'Cannot upgrade this structure.');
+        upgrade(s.id); break;
+      }
+      case 'pump': integer(command.n); requireValue(command.n>0 && command.n<=pumpLimit(p),'Exceeds available pumping capacity.'); pump(command.n); break;
+      case 'sell': integer(command.n); requireValue(command.n>0 && command.n<=p.water,'Not enough water.'); sellWater(command.n); break;
+      case 'deposit': integer(command.n); requireValue(command.n>0 && command.n<=p.money,'Not enough money.'); deposit(command.n); break;
+      case 'withdraw': integer(command.n); requireValue(command.n>0 && command.n<=p.bank,'Not enough savings.'); withdraw(command.n); break;
+      case 'proposeTrade': {
+        const t=command.trade; requireValue(t && typeof t==='object','Invalid trade.'); target(t.to,pid);
+        for(const k of ['gm','gw','rm','rw']) integer(t[k]);
+        requireValue(t.gm+t.gw+t.rm+t.rw>0,'Enter an exchange.');
+        const b=P(t.to); requireValue(t.gm<=p.money && t.gw<=p.water && t.rm<=b.money && t.rw<=b.water,'Trade exceeds available resources.');
+        UI.trade={to:t.to,gm:t.gm,gw:t.gw,rm:t.rm,rw:t.rw}; proposeTrade(); break;
+      }
+      case 'proposeJoint': {
+        const t=validType(command.type), to=target(command.to,pid), c=costFor(t,1);
+        requireValue(p.money>=Math.ceil(c/2) && P(to).money>=Math.floor(c/2),'Not enough money to co-fund.');
+        integer(command.tile,p.land.length-1); requireValue(canBuildOn(pid,t,command.tile),'This structure cannot be built on that tile.');
+        proposeJoint(t,to,command.tile); break;
+      }
+      case 'playBonus': {
+        integer(command.index,p.bonus.length-1); const b=BONUS[p.bonus[command.index]];
+        requireValue(b && !b.passive,'This card is passive.');
+        UI.target=b.target?target(command.target,pid):null; playBonus(command.index); break;
+      }
+      case 'endTurn': {
+        const a=command.alloc; requireValue(a && a.on && typeof a.on==='object' && !Array.isArray(a.on),'Invalid allocation.');
+        integer(a.recharge); integer(a.xCity??0); integer(a.xAgri??0); const on={};
+        for(const d of demandList(pid)) { requireValue(a.on[d.i]===undefined || typeof a.on[d.i]==='boolean','Invalid allocation.'); on[d.i]=!!a.on[d.i]; }
+        UI.alloc={on,recharge:a.recharge,xCity:a.xCity??0,xAgri:a.xAgri??0}; const summary=allocSummary();
+        requireValue(summary.ok && UI.alloc.recharge===a.recharge && UI.alloc.xCity===(a.xCity??0) && UI.alloc.xAgri===(a.xAgri??0),'Water allocation exceeds available water, supply limits or infiltration capacity.');
+        endTurn(); if(G.phase==='pass'){ G.phase='turn';checkObjectives(curP(),false); } break;
+      }
+      default: throw new Error('Unknown action.');
+    }
+  }
+  requireValue(Number.isSafeInteger(G.aquifer) && G.aquifer>=0 && G.aquifer<=G.aqMax,'Invalid aquifer balance.');
+  for(const p of G.players) for(const key of ['money','water','bank']) requireValue(Number.isSafeInteger(p[key]) && p[key]>=0,'Invalid resource balance.');
+  const occupied=new Set();
+  for(const s of G.structs){ const key=s.host+':'+s.tile; requireValue(!occupied.has(key)&&Number.isInteger(s.tile)&&s.tile>=0&&s.tile<P(s.host).land.length&&landOk(s.type,P(s.host).land[s.tile]),'Invalid structure placement.'); occupied.add(key); }
+  for(const p of G.players) requireValue(wellsHosted(p.id)<=2,'Too many wells in one catchment.');
+  return G;
+}
+return { create(names) { newGame(names); return G; }, execute,
+  inspect(state,pid=0){G=structuredClone(state);G.cur=pid;UI.alloc=null;autoAlloc();return {allocation:UI.alloc,demand:demandList(pid),free:Object.fromEntries(TYPE_ORDER.map(t=>[t,freeTiles(pid,t)])),pumpLimit:G.weather?pumpLimit(P(pid)):0,storage:storageCap(pid),infiltration:infilCap(pid),opex:opexOf(pid),score:finalScores(),deckSize:DECK_SIZE};}
+};
