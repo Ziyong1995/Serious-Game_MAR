@@ -1,15 +1,25 @@
 /* Online controller. Only the server can change the shared game. */
 const NET={room:null,me:null,token:null,version:0,members:[],host:false,spectator:false,capacity:4,busy:false,online:true,turnKey:null,loading:true,notice:'',timer:null};
+const LAST_ROOM_KEY='wc31-last-room';
+const seatKey=code=>'wc31-seat-'+code;
 const initialWatchCode=new URL(location.href).searchParams.get('watch')?.toUpperCase()||'';
 let rememberedRoom=new URL(location.href).searchParams.get('room')?.toUpperCase()||initialWatchCode;
 function stored(key,fallback='') { try { return localStorage.getItem(key)||fallback; } catch { return fallback; } }
 function remember(key,value) { try { localStorage.setItem(key,value); } catch {} }
-function readToken(code) { try { return sessionStorage.getItem('wc3-seat-'+code)||stored('wc3-seat-'+code); } catch { return stored('wc3-seat-'+code); } }
+function readToken(code) {
+  const key=seatKey(code);
+  try { return sessionStorage.getItem(key)||stored(key); }
+  catch { return stored(key); }
+}
 function saveSeat(data) {
   NET.shareLink=null;
   NET.token=data.token||NET.token;
-  if(NET.token) { try { sessionStorage.setItem('wc3-seat-'+data.code,NET.token); } catch {} remember('wc3-seat-'+data.code,NET.token); }
-  rememberedRoom=data.code; remember('wc3-last-room',data.code);
+  if(NET.token) {
+    const key=seatKey(data.code);
+    try { sessionStorage.setItem(key,NET.token); } catch {}
+    remember(key,NET.token);
+  }
+  rememberedRoom=data.code; remember(LAST_ROOM_KEY,data.code);
   const u=new URL(location.href); u.search='';u.searchParams.set('room',data.code); history.replaceState({},'',u);
 }
 function applySnapshot(data) {
@@ -99,8 +109,8 @@ function roomBar() {
   return `<div class="onlinebar"><div class="field"><span class="signal ${NET.online?'':'off'}"></span><span>${NET.online?'Connected / 已连接':'Reconnecting / 正在重连'}</span><span class="roomcode">${esc(NET.room)}</span>${!NET.spectator?'<button class="ghost" data-net="copy">Player link / 玩家邀请</button>':''}<button class="ghost" data-net="copyWatch">Share spectator view / 分享观众视角</button></div><span class="note">${NET.spectator?'Spectator / 观众 · read-only':'You / 你：'+esc(NET.members[NET.me]?.name||'')}${NET.host?' · Host':''}${NET.busy?' · Saving…':''}</span>${NET.shareLink?`<label class="shared-url">Copy this link / 复制链接<input readonly value="${esc(NET.shareLink)}" aria-label="Share link"></label>`:''}</div>`;
 }
 function renderSetup() {
-  const saved=stored('wc3-last-room'),hasSeat=saved&&readToken(saved);
-  return `<header class="top"><div class="brand"><span class="mark">${UIICON.mark}</span><div><h1>Watershed <span>Council</span></h1><span class="sub">Online · version 3</span></div></div><button class="ghost" data-act="rules">How to play</button></header>
+  const saved=stored(LAST_ROOM_KEY),hasSeat=saved&&readToken(saved);
+  return `<header class="top"><div class="brand"><span class="mark">${UIICON.mark}</span><div><h1>Watershed <span>Council</span></h1><span class="sub">Online · version ${RELEASE}</span></div></div><button class="ghost" data-act="rules">How to play</button></header>
   <section class="hero"><div style="display:flex;flex-direction:column;gap:16px"><span class="label">Online multiplayer · 3–5 players</span><h2>One aquifer.<br>Your own screen.<br>Eight seasons.</h2><p>Manage your catchment, invest in water infrastructure, and negotiate over a shared aquifer. Everyone plays on their own computer or phone.</p><p class="muted">每人使用自己的设备。创建房间，把链接发给朋友，一起进入同一局游戏。</p><div class="onlinefeatures"><span>Private objectives</span><span>Shared board</span><span>Saved progress</span></div></div>
   <div class="panel"><h2 style="font-size:24px">Join the council / 加入游戏</h2>${NET.notice?`<div class="warnbox">${esc(NET.notice)}</div>`:''}
   <label class="onlinefield">Your name / 你的名字<input id="online-name" autocomplete="nickname" maxlength="24" value="${esc(stored('wc-name'))}" placeholder="e.g. Ana"></label>
@@ -127,7 +137,20 @@ function waitingPanel() {
 }
 function spectatorPanel(){
   const who=G.phase.startsWith('weather')?P(G.start):P(G.cur);
-  return `<section class="panel spectator-panel"><div><span class="label">Spectator view / 观众视角</span><h2 style="font-size:24px">${G.phase==='end'?'Final results':esc(who.name)+' · '+(G.phase==='weather'?'drawing the event':G.phase==='weatherResult'?'reviewing the event':'taking a turn')}</h2><p class="note">This view updates automatically. Secret objectives and bonus cards remain private. Spectators cannot play or confirm offers.</p></div><div class="spectator-event">${eventCard(G.weather?.key)}<div><span class="label">Aquifer history</span><div class="chart">${aqChart()}</div><p class="note">${G.pending?`${esc(P(G.pending.from).name)} is waiting for ${esc(P(G.pending.to).name)} to answer an offer.`:'No pending offer.'}</p></div></div><div class="tscroll"><table class="tbl"><thead><tr><th>Player</th><th>Money + bank</th><th>Water</th><th>VP so far</th><th>Net recharge</th><th>Objectives completed</th></tr></thead><tbody>${G.players.map(p=>`<tr><td>${pChip(p)} ${esc(p.name)}</td><td>${p.money+p.bank} M</td><td>${p.water} W</td><td>${vpTotal(p)}</td><td>${netRecharge(p)} W</td><td>${p.done.length}</td></tr>`).join('')}</tbody></table></div></section>`;
+  const status=G.phase==='end'?'Final results':esc(who.name)+' · '+(
+    G.phase==='weather'?'drawing the event':G.phase==='weatherResult'?'reviewing the event':'taking a turn');
+  const offer=G.pending
+    ? `${esc(P(G.pending.from).name)} is waiting for ${esc(P(G.pending.to).name)} to answer an offer.`
+    : 'No pending offer.';
+  return `<section class="panel spectator-panel">
+    <div><span class="label">Spectator view / 观众视角</span><h2 style="font-size:24px">${status}</h2>
+      <p class="note">This view updates automatically. Secret objectives and bonus cards remain private. Spectators cannot play or confirm offers.</p></div>
+    <div class="spectator-event">${eventCard(G.weather?.key)}
+      <div><span class="label">Aquifer history</span><div class="chart">${aqChart()}</div><p class="note">${offer}</p></div></div>
+    <div class="tscroll"><table class="tbl">
+      <thead><tr><th>Player</th><th>Cash (M)</th><th>Water</th><th>VP so far</th><th>Net recharge</th><th>Objectives completed</th></tr></thead>
+      <tbody>${G.players.map(p=>`<tr><td>${pChip(p)} ${esc(p.name)}</td><td>${p.money} M</td><td>${p.water} W</td><td>${vpTotal(p)}</td><td>${netRecharge(p)} W</td><td>${p.done.length}</td></tr>`).join('')}</tbody>
+    </table></div></section>`;
 }
 function pendingOnline() {
   const q=G.pending;
@@ -193,14 +216,19 @@ document.addEventListener('click',async e=>{
     case 'target': UI.target=+el.dataset.p;break;
     case 'tradeTo': UI.trade={to:+el.dataset.p,gm:0,gw:0,rm:0,rw:0};break;
     case 'autoAlloc': autoAlloc();break;
-    case 'step': {const k=el.dataset.key,d=+el.dataset.d;if(k.startsWith('trade.'))UI.trade[k.slice(6)]=Math.max(0,UI.trade[k.slice(6)]+d);else if(k.startsWith('alloc.'))UI.alloc[k.slice(6)]=Math.max(0,(UI.alloc[k.slice(6)]||0)+d);else if(['pumpN','sellN','bankN'].includes(k))UI[k]=Math.max(0,UI[k]+d);break;}
+    case 'step': {
+      const k=el.dataset.key,d=+el.dataset.d;
+      if(k.startsWith('trade.')) UI.trade[k.slice(6)]=Math.max(0,UI.trade[k.slice(6)]+d);
+      else if(k.startsWith('alloc.')) UI.alloc[k.slice(6)]=Math.max(0,(UI.alloc[k.slice(6)]||0)+d);
+      else if(['pumpN','sellN'].includes(k)) UI[k]=Math.max(0,UI[k]+d);
+      break;
+    }
     case 'build': command={act,type:el.dataset.t,tile:+el.dataset.tile};break;
     case 'swapObj': command={act,uid:+el.dataset.u};break;
     case 'upgrade': command={act,id:+el.dataset.id};break;
     case 'jointWith': if(UI.joint)command={act:'proposeJoint',type:UI.joint.type,tile:UI.joint.tile,to:+el.dataset.p};break;
     case 'pump': command={act,n:UI.pumpN};break;
     case 'sell': command={act,n:UI.sellN};break;
-    case 'deposit': case 'withdraw': command={act,n:UI.bankN};break;
     case 'proposeTrade': command={act,trade:UI.trade};break;
     case 'playBonus': command={act,index:+el.dataset.i,target:UI.target};break;
     case 'endTurn': {const current=G.cur;G.cur=NET.me;const summary=allocSummary();G.cur=current;if(!summary.ok){toast('You have allocated more water than you hold.');return;}command={act,alloc:UI.alloc};break;}

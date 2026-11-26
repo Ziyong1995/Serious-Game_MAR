@@ -1,7 +1,8 @@
 {
   "gameVersion": 3,
+  "release": "3.1.0",
   "sourceFile": "src/game.html",
-  "sourceSha256": "e8e73def8da0c815ab82ca41cb7ebc996e449b4d4dbdcc811346dc154bf3c97b",
+  "sourceSha256": "9145c62b4b224cdda961eec1c928fe4bc7c56c9731cfad51b793781869a3a46d",
   "eventDeck": 34,
   "playerSeats": [
     3,

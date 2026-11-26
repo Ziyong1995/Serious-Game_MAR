@@ -19,15 +19,19 @@ function project(room,me,version) {
   }
   return {code:room.code,capacity:room.capacity,version,me,host:me===0,spectator:me===null,members:room.members.map((m,id)=>({id,name:m.name})),game};
 }
-async function readRoom(db,code) { const row=await db.prepare('SELECT state, version FROM rooms_v3 WHERE code = ?').bind(code).first(); fail(row,404,'Room not found. Check the room code. This update requires a new v3 room.'); return {room:JSON.parse(row.state),version:row.version}; }
+async function readRoom(db,code) {
+  const row=await db.prepare('SELECT state, version FROM rooms_v31 WHERE code = ?').bind(code).first();
+  fail(row,404,`Room not found. Check the code or ask the host for a link to an Online ${RELEASE} room.`);
+  return {room:JSON.parse(row.state),version:row.version};
+}
 async function memberId(room,request) { const token=request.headers.get('Authorization')?.replace(/^Bearer /,''); fail(token && /^[a-f0-9]{64}$/.test(token),401,'Rejoin this room on the browser you used before.'); const hash=await digest(token); const me=room.members.findIndex(m=>m.tokenHash===hash); fail(me>=0,401,'This seat is no longer available.'); return me; }
 async function persist(db,room,version) {
-  const r=await db.prepare('UPDATE rooms_v3 SET state = ?, version = version + 1, updated_at = ? WHERE code = ? AND version = ?').bind(JSON.stringify(room),Date.now(),room.code,version).run();
+  const r=await db.prepare('UPDATE rooms_v31 SET state = ?, version = version + 1, updated_at = ? WHERE code = ? AND version = ?').bind(JSON.stringify(room),Date.now(),room.code,version).run();
   fail(r.meta.changes===1,409,'The game changed. Please try your action again.'); return version+1;
 }
 async function api(request,env) {
   const url=new URL(request.url);
-  if(url.pathname==='/api/health') return json({ok:true,version:3,spectators:true,storage:!!env.DB});
+  if(url.pathname==='/api/health') return json({ok:true,version:3,release:RELEASE,spectators:true,storage:!!env.DB});
   fail(env.DB,503,'The game storage is not available yet.');
   if(request.method==='POST') {
     const origin=request.headers.get('Origin'); fail(!origin || origin===url.origin,403,'Cross-site requests are not allowed.');
@@ -38,7 +42,7 @@ async function api(request,env) {
     const token=randomHex(),tokenHash=await digest(token);
     for(let i=0;i<5;i++) {
       const code=roomCode(),room={code,capacity:b.capacity,members:[{name,tokenHash}],game:null,receipts:[]};
-      const r=await env.DB.prepare('INSERT OR IGNORE INTO rooms_v3 (code, state, version, updated_at) VALUES (?, ?, 1, ?)').bind(code,JSON.stringify(room),Date.now()).run();
+      const r=await env.DB.prepare('INSERT OR IGNORE INTO rooms_v31 (code, state, version, updated_at) VALUES (?, ?, 1, ?)').bind(code,JSON.stringify(room),Date.now()).run();
       if(r.meta.changes===1) return json({...project(room,0,1),token},201);
     }
     throw new ApiError(503,'Could not create a room. Please try again.');

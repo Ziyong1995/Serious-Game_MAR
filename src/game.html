@@ -445,6 +445,7 @@ details.log{border:none;box-shadow:var(--shadow);border-radius:16px}
 .namegrid input{border-radius:10px;padding:10px 12px;border-color:transparent;background:var(--surface-2)}
 .namegrid input:focus{outline:2px solid var(--pc);outline-offset:1px}
 
+.tile .dot.more{background:var(--bad)} .tile .dot.less{background:var(--good)}
 </style>
 
 <div class="wrap" id="app"></div>
@@ -558,7 +559,7 @@ const sum = a => a.reduce((x,y)=>x+y,0);
 const clamp = (v,a,b) => Math.max(a, Math.min(b, v));
 
 let G = null;
-const UI = {nPlayers:4, names:['Ana','Ben','Chiara','Dev','Emil'], tab:'build', showObj:false, pumpN:1, sellN:1, bankN:2,
+const UI = {nPlayers:4, names:['Ana','Ben','Chiara','Dev','Emil'], tab:'build', showObj:false, pumpN:1, sellN:1,
   alloc:null, trade:{to:null,gm:0,gw:0,rm:0,rw:0}, joint:null, target:null, rules:false, confirmNew:false};
 
 function log(t){ G.log.unshift(`R${G.round}: ${t}`); if(G.log.length>200) G.log.pop(); }
@@ -569,6 +570,8 @@ function catOf(s){ return TYPES[s.type].cat[s.level-1]; }
 function sname(s){ return TYPES[s.type].names[s.level-1]; }
 function owned(pid){ return G.structs.filter(s => s.owners.includes(pid)); }
 function share(s){ return s.owners.length>1 ? 0.5 : 1; }
+/* whole-unit split of a shared structure's value: the host gets the odd unit, so the owners' parts add up to the total */
+function part(s,pid,v){ if(s.owners.length<2) return v; return s.host===pid ? Math.ceil(v/2) : Math.floor(v/2); }
 function count(pid,type){ return P(pid).land.filter(t=>t===type).length; }
 function landSum(pid,k){ return sum(P(pid).land.map(t=>LAND[t][k]||0)); }
 function stressed(){ return G.aquifer <= G.aqStress; }
@@ -589,18 +592,18 @@ function tileLabel(pid,i){ const p=P(pid), t=p.land[i]; const same=p.land.filter
 
 /* shared infiltration structures pool land and work better: +1 infiltration */
 function infilOf(s){ const base=stat(s,'infil'); if(!base) return 0; return Math.max(0, base + GEO[P(s.host).geo].infil + (s.owners.length>1?1:0)); }
-function infilCap(pid){ return Math.floor(sum(owned(pid).map(s=>infilOf(s)*share(s)))) + landSum(pid,'infil'); }
-function wellInfil(p,land){ return Math.floor(sum(owned(p.id).filter(s=>s.type==='well' && (!land || P(s.host).land[s.tile]===land)).map(s=>infilOf(s)*share(s)))); }
+function infilCap(pid){ return sum(owned(pid).map(s=>part(s,pid,infilOf(s)))) + landSum(pid,'infil'); }
+function wellInfil(p,land){ return sum(owned(p.id).filter(s=>s.type==='well' && (!land || P(s.host).land[s.tile]===land)).map(s=>part(s,p.id,infilOf(s)))); }
 function pumpCap(pid){
   if(G.aquifer<=0) return 0;
   const p=P(pid);
   let c = sum(owned(pid).filter(s=>s.type==='well').map(s=>{
     let v = stat(s,'pump') + GEO[P(s.host).geo].pump - (stressed()?1:0);
-    return Math.max(1,v)*share(s); }));
-  c = Math.floor(c) + (p.r && p.r.permit ? 2 : 0);
+    return part(s,pid,Math.max(1,v)); }));
+  c = c + (p.r && p.r.permit ? 2 : 0);
   return c;
 }
-function extraStorage(pid){ return Math.floor(sum(owned(pid).map(s=>stat(s,'storage')*share(s)))) + landSum(pid,'storage'); }
+function extraStorage(pid){ return sum(owned(pid).map(s=>part(s,pid,stat(s,'storage')))) + landSum(pid,'storage'); }
 function storageCap(pid){ return 4 + extraStorage(pid); }
 function protection(pid){ return sum(owned(pid).map(s=>stat(s,'flood'))) + landSum(pid,'flood'); }
 function hardening(pid){ return sum(owned(pid).map(s=>stat(s,'harden'))); }
@@ -623,7 +626,7 @@ function demandList(pid){
     if(t==='city') need+=G.war||0;
     if(t==='agri' && w.agriExtra) need+=w.agriExtra;
     out.push({i,t,need}); }});
-  let cut=Math.floor(sum(owned(pid).map(s=>stat(s,'cut')*share(s))));
+  let cut=sum(owned(pid).map(s=>part(s,pid,stat(s,'cut'))));
   for(const land of ['city','agri']) for(const d of out){ if(d.t!==land) continue; while(cut>0 && d.need>1){ d.need--; cut--; } }
   return out;
 }
@@ -644,7 +647,7 @@ function newGame(names){
     players: names.map((name,i)=>({
       id:i, name:name.trim()||`Player ${i+1}`, color:PCOLORS[i],
       land: shuffle(['city','agri', extraPool[Math.floor(Math.random()*extraPool.length)], extraPool[Math.floor(Math.random()*extraPool.length)]]),
-      geo:geos[i], money:15, water:4, bank:0,
+      geo:geos[i], money:15, water:4,
       vp:{objectives:0,shortage:0,flood:0,health:0,aquifer:0,bonus:0},
       objectives:[], done:[], bonus:[], insurance:0, maintRounds:0, levels:0,
       recharged:0, pumped:0, joints:0, cityInject:0,
@@ -663,7 +666,7 @@ function orderFrom(s){ const n=G.players.length; return Array.from({length:n},(_
    everyone, the others only to players with that land). Tier I runs rounds 1–3, tier II rounds 4–6, tier III
    rounds 7–8. When a tier starts, unfinished objectives expire and everyone is dealt two new ones: targets
    rise and so does the VP. Each objective is checked for achievability within its tier before it is dealt:
-   affordable with money + bank + expected income, enough turns left, a free tile where it needs a structure,
+   affordable with money + expected income, enough turns left, a free tile where it needs a structure,
    and any weather it depends on likely to come up in time. */
 const tierOf = r => r<=3?1:r<=6?2:3;
 const TIER = ['','I','II','III'];
@@ -672,7 +675,7 @@ const pct = x => Math.round(x*100)+'%';
 const plural = (n,w) => `${n} ${w}${n===1?'':'s'}`;
 function tierTurns(){ return TIER_END[tierOf(G.round)]-G.round+1; }
 function tierDraws(){ return tierTurns()-(G.weather?1:0); }
-function budget(p){ return p.money+p.bank+5*(tierTurns()-1); }
+function budget(p){ return p.money+5*(tierTurns()-1); }
 function deckChance(pred, draws){
   draws = draws==null ? tierDraws() : draws;
   const N=G.deck.length, k=G.deck.filter(id=>pred(CARDS[id])).length;
@@ -749,13 +752,15 @@ const OBJ = {
     make(p,t){ const ups=owned(p.id).filter(s=>s.level<3); if(ups.length<t) return null;
       if(sum(ups.map(s=>costFor(s.type,s.level+1)))>budget(p)) return null;
       return {snap:ups.map(s=>[s.id,s.level]), vp:VP3[t]}; },
-    goal:(p,o)=>`Upgrade all your infrastructure by 1 level: every one of the ${plural(o.snap.length,'structure')} you own below level 3.`,
+    goal:(p,o)=>`Upgrade all your infrastructure by 1 level: every one of the ${plural(o.snap.length,'structure')} you own below level 3 must end above the level it has now. A structure you lose completely no longer counts.`,
     met:(p,o)=>{ const st=o.snap.map(([id,l])=>{ const s=G.structs.find(x=>x.id===id); return !s ? 'gone' : s.level>l; });
       return st.includes(true) && st.every(x=>x!==false); },
     prog:(p,o)=>`${o.snap.filter(([id,l])=>{ const s=G.structs.find(x=>x.id===id); return s&&s.level>l; }).length} / ${o.snap.length} upgraded`},
 
   cofund:{land:'All', name:()=>'Co-fund a structure',
-    make(p,t){ const l=t; if(budget(p)<[0,2,5,8][t]) return null; return {l, baseId:G.nextId, vp:[0,3,4,6][t]}; },
+    make(p,t){ const l=t; if(budget(p)<[0,2,5,8][t]) return null;
+      if(!G.players.some(q=>TYPE_ORDER.some(ty=>canHost(q.id,ty)))) return null;
+      return {l, baseId:G.nextId, vp:[0,3,4,6][t]}; },
     goal:(p,o)=>`Co-fund a structure with one other player${o.l>1?` and bring it to level ${o.l}`:''}. Shared infiltrating structures soak in +1 W.`,
     met:(p,o)=>G.structs.some(s=>s.owners.length>1 && s.owners.includes(p.id) && s.id>=o.baseId && s.level>=o.l),
     prog:(p,o)=>{ const s=G.structs.filter(s=>s.owners.length>1 && s.owners.includes(p.id) && s.id>=o.baseId); return s.length?`shared ${esc(sname(s[0]))} · level ${Math.max(...s.map(x=>x.level))} / ${o.l}`:'no shared structure yet'; }},
@@ -820,8 +825,11 @@ function checkObjectives(p,eot){
 function swapObjective(uid){
   const p=curP(); if(p.r.swapped||p.money<2) return;
   const o=p.objectives.find(x=>x.uid===uid); if(!o) return;
-  p.money-=2; p.r.swapped=true; p.objectives=p.objectives.filter(x=>x!==o);
-  drawObjective(p, o.type);
+  const idx=p.objectives.indexOf(o);
+  p.objectives.splice(idx,1);
+  const fresh=drawObjective(p, o.type);
+  if(!fresh){ p.objectives.splice(idx,0,o); toast('No other objective fits your catchment right now. You keep this one and your money.'); return; }
+  p.money-=2; p.r.swapped=true;
   log(`${p.name} swapped an objective for 2 M.`);
 }
 
@@ -836,7 +844,7 @@ function drawEvent(){
   G.weather=w;
   for(const pid of G.order){
     const p=P(pid); const r={notes:[]};
-    p.r={pumped:0,infilUsed:0,recharged:0,permit:false,swapped:false};
+    p.r={pumped:0,infilUsed:0,recharged:0,wellUsed:0,cityWellUsed:0,permit:false,swapped:false};
     for(const o of p.objectives) if(o.type==='reserve' && w.dry && p.water>=o.x){ o.hit=true; r.notes.push('drought reserve ✓'); }
     // water supplied by the card
     const cap=storageCap(pid);
@@ -846,6 +854,9 @@ function drawEvent(){
     // surplus soaks into the aquifer through your infiltration structures, except in flood rounds
     const inf = w.wet ? 0 : Math.min(over, infilCap(pid), G.aqMax-G.aquifer);
     G.aquifer+=inf; p.r.infilUsed=inf; p.r.recharged=inf; p.recharged+=inf; r.infil=inf; r.spill=over-inf;
+    // rain overflow soaks in through forests and basins first; only the rest passes through wells
+    const viaWells=Math.max(0, inf-(infilCap(pid)-wellInfil(p)));
+    p.r.wellUsed=viaWells; p.r.cityWellUsed=Math.min(viaWells, wellInfil(p,'city'));
     // money supplied (or taken) by the card
     const before=p.money; p.money=Math.max(0,p.money+w.cash); r.cash=p.money-before;
     if(w.flood){ const prot=protection(pid); r.prot=prot; r.dmgText=applyFlood(pid, Math.max(0,w.flood-prot)); }
@@ -868,10 +879,11 @@ function applyFlood(pid,dmg){
   if(p.insurance>0){ p.insurance--; p.bonus.splice(p.bonus.indexOf('insurance'),1); log(`${p.name}'s flood insurance absorbed ${dmg} damage.`); return 'insured'; }
   const parts=[];
   for(let k=0;k<dmg;k++){
-    const cand=G.structs.filter(s=>s.host===pid && !TYPES[s.type].floodproof);
+    // each point of damage knocks one structure above level 1 back to level 1; buildings are never destroyed
+    const cand=G.structs.filter(s=>s.host===pid && s.level>1);
     if(!cand.length){ p.vp.flood-=1; parts.push('−1 VP'); continue; }
     const s=cand[Math.floor(Math.random()*cand.length)];
-    parts.push(`${sname(s)} ↓`); downgrade(s);
+    const was=sname(s); s.level=1; parts.push(`${was} → ${sname(s)}`);
   }
   log(`Flood hit ${p.name}: ${parts.join(', ')}.`);
   return parts.join(', ');
@@ -905,6 +917,7 @@ function upgrade(id){
   gainLevel(p,catOf(s),cost);
   log(`${p.name} upgraded to ${sname(s)} (${cost} M).`);
   checkObjectives(p,false);
+  for(const o of s.owners) if(o!==p.id) checkObjectives(P(o),false);
 }
 function pumpLimit(p){ return Math.max(0,Math.min(pumpCap(p.id)-p.r.pumped, G.aquifer)); }
 function pump(n){
@@ -913,9 +926,7 @@ function pump(n){
   log(`${p.name} pumped ${n} W from the aquifer.`);
   checkObjectives(p,false);
 }
-function sellWater(n){ const p=curP(); n=Math.min(n,p.water); if(n<=0) return; p.water-=n; p.money+=n; log(`${p.name} sold ${n} W to the bank.`); }
-function deposit(n){ const p=curP(); n=Math.min(n,p.money); if(n<=0) return; p.money-=n; p.bank+=n; }
-function withdraw(n){ const p=curP(); n=Math.min(n,p.bank); if(n<=0) return; p.bank-=n; p.money+=n; }
+function sellWater(n){ const p=curP(); n=Math.min(n,p.water); if(n<=0) return; p.water-=n; p.money+=n; log(`${p.name} sold ${n} W.`); }
 
 function proposeTrade(){
   const p=curP(), t=UI.trade; if(t.to==null) return;
@@ -1004,11 +1015,18 @@ function endTurn(){
   const extra=(a.xCity||0)+(a.xAgri||0); income+=extra;
   p.money+=income; p.vp.shortage-=short;
   out.push(`income ${income} M${extra?` (incl. ${extra} M from extra supply)`:''}`); if(short) out.push(`shortages −${short} VP`);
-  if(a.recharge>0){ G.aquifer+=a.recharge; p.recharged+=a.recharge; p.r.recharged+=a.recharge; out.push(`recharged ${a.recharge} W`); }
+  if(a.recharge>0){
+    G.aquifer+=a.recharge; p.recharged+=a.recharge; p.r.recharged+=a.recharge; out.push(`recharged ${a.recharge} W`);
+    // water you put in yourself goes through your wells first, city wells first among them
+    const cityRoom=Math.max(0, wellInfil(p,'city')-(p.r.cityWellUsed||0));
+    const wellRoom=Math.max(0, wellInfil(p)-(p.r.wellUsed||0));
+    const viaWells=Math.min(a.recharge, wellRoom), viaCity=Math.min(viaWells, cityRoom);
+    p.r.wellUsed=(p.r.wellUsed||0)+viaWells; p.r.cityWellUsed=(p.r.cityWellUsed||0)+viaCity;
+  }
   const net=p.r.recharged-p.r.pumped;
   if(net>0){ p.money+=net; out.push(`recharge credit +${net} M`); }
-  p.cityInject += Math.min(p.r.recharged, wellInfil(p,'city'));
-  const injected = Math.min(p.r.recharged, wellInfil(p));
+  p.cityInject += p.r.cityWellUsed||0;
+  const injected = p.r.wellUsed||0;
   for(const o of p.objectives){
     if(o.type==='inject' && injected>=o.x) o.hit=true;
     if(o.type==='streamflow'){ const nr=p.r.recharged-p.r.pumped; if(w.wet && p.r.pumped===0){} else o.run = nr>=o.k ? o.run+1 : 0; }
@@ -1045,25 +1063,23 @@ function endRound(){
   if(G.contamination>=2){ for(const p of G.players) p.vp.health-=1; log('Contamination 2+: every player loses 1 VP (public health).'); }
   if(healthy()){ for(const p of G.players) p.vp.aquifer+=1; log(`Aquifer at or above its starting level (${G.aqStart} W): every player gains 1 VP.`); }
   else if(stressed()){ for(const p of G.players) p.vp.aquifer-=1; log('Aquifer below the stress line: every player loses 1 VP.'); }
-  for(const p of G.players){ const i=Math.floor(p.bank*0.1); if(i){ p.bank+=i; } }
   G.history.push({round:G.round,aquifer:G.aquifer,contam:G.contamination});
-  if(G.round>=ROUNDS){ G.phase='end'; log('Game over.'); save(); return; }
+  if(G.round>=ROUNDS){ for(const p of G.players) checkObjectives(p,false); G.phase='end'; log('Game over.'); save(); return; }
   G.round++; G.start=(G.start+1)%G.players.length; G.order=orderFrom(G.start); G.ti=0; G.cur=G.order[0];
+  G.phase='weather'; G.weather=null;
   if(tierOf(G.round)>tierOf(G.round-1)){
-    for(const p of G.players){ p.objectives=[]; drawObjective(p); drawObjective(p); }
+    for(const p of G.players){ checkObjectives(p,false); p.objectives=[]; drawObjective(p); drawObjective(p); }
     log(`Objectives move up to tier ${TIER[tierOf(G.round)]}: unfinished objectives expired and everyone was dealt two new ones.`);
   }
-  G.phase='weather'; G.weather=null;
   save();
 }
 function finalScores(){
   const best=Math.max(...G.players.map(netRecharge));
   return G.players.map(p=>{
-    const m=Math.floor((p.money+p.bank)/5);
     const steward = best>0 && netRecharge(p)===best ? 3 : 0;
-    const rows={Objectives:p.vp.objectives, 'Aquifer health':p.vp.aquifer, Steward:steward, Shortages:p.vp.shortage, Floods:p.vp.flood, Pollution:p.vp.health, Bonus:p.vp.bonus, Savings:m};
+    const rows={Objectives:p.vp.objectives, 'Aquifer health':p.vp.aquifer, Steward:steward, Shortages:p.vp.shortage, Floods:p.vp.flood, Pollution:p.vp.health, Bonus:p.vp.bonus};
     return {p,rows,total:sum(Object.values(rows))};
-  }).sort((a,b)=>b.total-a.total);
+  }).sort((a,b)=>b.total-a.total || b.p.money-a.p.money);
 }
 
 /* ===================== PERSISTENCE ===================== */
@@ -1190,9 +1206,10 @@ function renderBoard(){
     const active = G.phase==='turn' && p.id===G.cur;
     const r=p.r||{};
     const pos=G.order.indexOf(p.id);
+    const need=Object.fromEntries(demandList(p.id).map(d=>[d.i,d.need]));
     const tiles=p.land.map((t,i)=>{ const s=structOn(p.id,i);
       const chip = s ? `<span class="s onTile ${catOf(s)} ${s.owners.length>1?'shared':''}" title="${esc(sname(s))}${s.owners.length>1?' (shared with '+esc(P(s.owners.find(o=>o!==p.id)).name)+')':''}"><i></i>${TYPES[s.type].short[s.level-1]}<span class="lvl">${'●'.repeat(s.level)}${'○'.repeat(3-s.level)}</span></span>` : '';
-      return `<div class="tile ${t}" title="${tileLabel(p.id,i)}${s?' · '+esc(sname(s)):''}">${ICON[t]}${LAND[t].demand?`<span class="dot">${UIICON.drop}${LAND[t].demand}</span>`:''}${chip}</div>`; }).join('');
+      return `<div class="tile ${t}" title="${tileLabel(p.id,i)}${s?' · '+esc(sname(s)):''}">${ICON[t]}${LAND[t].demand?`<span class="dot ${need[i]>LAND[t].demand?'more':need[i]<LAND[t].demand?'less':''}" title="Needs ${need[i]} W this round (normally ${LAND[t].demand} W)">${UIICON.drop}${need[i]}</span>`:''}${chip}</div>`; }).join('');
     return `<div class="col ${active?'active':''}" style="--pc:${p.color}">
       <div class="colhead"><span class="who"><span class="avatar sm">${esc(p.name.slice(0,1).toUpperCase())}</span><span class="nm">${esc(p.name)}</span></span>${active?'<span class="playing">Playing</span>':`<span class="ord mono">${ORD[pos]}</span>`}</div>
       <div class="colres mono"><span title="money">${UIICON.coin}${p.money}</span><span title="water">${UIICON.drop}${p.water}</span><span title="victory points">${UIICON.star}${vpTotal(p)}</span></div>
@@ -1219,7 +1236,7 @@ function renderDesk(){
   const left=`<div class="panel me" style="--pc:${p.color}">
     <div class="mehead"><span class="avatar">${esc(p.name.slice(0,1).toUpperCase())}</span><div><h2>${esc(p.name)}</h2><span class="note">${p.land.map(t=>LAND[t].name).join(' · ')} on ${GEO[p.geo].name.toLowerCase()} ground</span></div></div>
     <div class="res">
-      <div class="rc money"><span class="ic">${UIICON.coin}</span><small>Money</small><b>${p.money}</b><small>bank ${p.bank}</small></div>
+      <div class="rc money"><span class="ic">${UIICON.coin}</span><small>Money</small><b>${p.money}</b><small>for building</small></div>
       <div class="rc water"><span class="ic">${UIICON.drop}</span><small>Water</small><b>${p.water}</b><span class="bar"><i style="width:${clamp(p.water/cap,0,1)*100}%"></i></span><small>storage ${cap}</small></div>
       <div class="rc vp"><span class="ic">${UIICON.star}</span><small>Victory pts</small><b>${vpTotal(p)}</b><small>so far</small></div>
       <div class="rc cost"><span class="ic">${UIICON.wrench}</span><small>Running cost</small><b>${opexOf(pid)}</b><small>M per round</small></div>
@@ -1238,7 +1255,7 @@ function renderDesk(){
     ${p.bonus.length?`<div><span class="label">Bonus cards</span><div class="cards" style="margin-top:6px">${p.bonus.map((b,i)=>`<div class="card ${BONUS[b].evil?'evil':''}"><b>${BONUS[b].name}</b><span class="muted">${BONUS[b].text}</span>${BONUS[b].passive?'':`<button class="btn sm ${BONUS[b].evil?'alt':''}" data-act="playBonus" data-i="${i}">Play</button>`}</div>`).join('')}</div>
       ${p.bonus.some(b=>BONUS[b].target)?`<div class="field" style="margin-top:6px"><span class="note">Target:</span>${G.players.filter(o=>o.id!==pid).map(o=>`<button class="pbtn ${UI.target===o.id?'on':''}" style="--pc:${o.color}" data-act="target" data-p="${o.id}">${pChip(o)}${esc(o.name)}</button>`).join('')}</div>`:''}</div>`:''}
   </div>`;
-  const tabs=[['build','Build'],['water','Water & bank'],['trade','Negotiate'],['alloc','Allocate & end turn']];
+  const tabs=[['build','Build'],['water','Water'],['trade','Negotiate'],['alloc','Allocate & end turn']];
   let body='';
   if(UI.tab==='build') body=renderBuild(p);
   if(UI.tab==='water') body=renderWater(p);
@@ -1290,13 +1307,11 @@ function renderWater(p){
   <div class="list">
     <div class="row"><div><div class="name">Pump groundwater</div><div class="meta">Capacity ${pumpCap(p.id)} · pumped ${p.r.pumped} this round${stressed()?' · aquifer stressed: −1 per well':''}</div></div>
       <div class="field">${stepper('pumpN',UI.pumpN,lim?1:0,lim)}<button class="btn sm" data-act="pump" ${lim?'':'disabled'}>Pump</button></div></div>
-    <div class="row"><div><div class="name">Sell water to the bank</div><div class="meta">1 W → 1 M</div></div>
+    <div class="row"><div><div class="name">Sell water</div><div class="meta">1 W → 1 M</div></div>
       <div class="field">${stepper('sellN',UI.sellN,p.water?1:0,p.water)}<button class="btn sm" data-act="sell" ${p.water?'':'disabled'}>Sell</button></div></div>
-    <div class="row"><div><div class="name">Bank account</div><div class="meta">${p.bank} M deposited · earns 10% each round</div></div>
-      <div class="field">${stepper('bankN',UI.bankN,1,30)}<button class="btn sm" data-act="deposit" ${p.money?'':'disabled'}>Deposit</button><button class="btn sm alt" data-act="withdraw" ${p.bank?'':'disabled'}>Withdraw</button></div></div>
   </div>
   ${!hasType(p.id,'well')?'<div class="warnbox">You need a well to pump from the shared aquifer.</div>':''}
-  <p class="note">Water above your storage capacity at the end of your turn spills away. Recharge happens in the allocation step and needs free infiltration capacity (ponds, infiltration wells, forests).</p>`;
+  <p class="note">Water above your storage capacity at the end of your turn spills away. Recharge happens in the allocation step and needs free infiltration capacity (infiltration wells, level-3 storage and flood systems, forests).</p>`;
 }
 function renderTrade(p){
   const t=UI.trade; const other=t.to!=null?P(t.to):null;
@@ -1436,10 +1451,10 @@ function renderRulesSheet(){
     <p>Everyone manages one catchment on top of a shared aquifer. After 8 rounds the player with the most victory points (VP) wins. Points come from secret objectives and from keeping the shared aquifer healthy, which nobody can do alone.</p>
     <h3>Each round</h3>
     <ul>
-      <li><b>Event card.</b> The start player draws from the event deck. The card sets how much water (rain) and money every player receives, and whether the aquifer gains or loses water. Rain fills your storage; overflow infiltrates through your infiltrating structures and forests, the rest spills. Floods damage your structures if flood strength exceeds your protection.</li>
-      <li><b>Turns</b> (start player first, rotating each round). Build or upgrade, pump, sell water, bank, trade and co-fund, play bonus cards, and once per turn swap one objective for 2 M.</li>
+      <li><b>Event card.</b> The start player draws from the event deck. The card sets how much water (rain) and money every player receives, and whether the aquifer gains or loses water. Rain fills your storage; overflow infiltrates through your infiltrating structures and forests, the rest spills. If flood strength exceeds your protection, each point of damage knocks one of your structures back to level 1 (structures are never destroyed); with nothing above level 1 left, you lose 1 VP instead.</li>
+      <li><b>Turns</b> (start player first, rotating each round). Build or upgrade, pump, sell water, trade and co-fund, play bonus cards, and once per turn swap one objective for 2 M.</li>
       <li><b>Allocate and end turn.</b> Supply your city and farmland tiles, optionally give extra water to the city or the crops (+1 M per W, up to +100%), and recharge the aquifer. Supplied tiles pay income; unsupplied tiles cost VP (city −2, farmland −1). Then pay running costs. Water above storage spills.</li>
-      <li><b>Round end.</b> Cleaning systems remove contamination. Aquifer at or above its starting level: every player gains 1 VP. At or below the stress line: every player loses 1 VP and saltwater intrudes (+1 contamination). Contamination 2+ costs everyone 1 VP. Bank deposits earn 10%.</li>
+      <li><b>Round end.</b> Cleaning systems remove contamination. Aquifer at or above its starting level: every player gains 1 VP. At or below the stress line: every player loses 1 VP and saltwater intrudes (+1 contamination). Contamination 2+ costs everyone 1 VP.</li>
     </ul>
     <h3>Land use</h3>
     <ul>
@@ -1469,7 +1484,7 @@ function renderRulesSheet(){
     <p>It starts at 6 + 5 W per player and holds at most 10 + 10 W per player. Winter rain refills it, droughts drain it (2–3 W per player), and floods add nothing because the water runs off. Every W you pump comes out of everyone's supply. At or below the stress line (3 W per player) every well pumps 1 less and saltwater intrudes each round.</p>
     <p><b>Why recharge?</b> At the end of your turn you earn 1 M for every W you put in this round beyond what you pumped. Every round the aquifer is at or above its starting level, everyone gains 1 VP; below the stress line, everyone loses 1 VP. The player with the highest net recharge at the end is the groundwater steward (+3 VP). Contamination makes every player who pumps without a cleaning system pay 1 M per level.</p>
     <h3>Final scoring</h3>
-    <ul><li>Objectives completed, plus aquifer-health points collected each round, plus the groundwater steward bonus and bonus cards.</li><li>Minus shortage, flood and pollution losses.</li><li>+1 VP per 5 M (cash + bank).</li></ul>
+    <ul><li>Objectives completed, plus aquifer-health points collected each round, plus the groundwater steward bonus and bonus cards.</li><li>Minus shortage, flood and pollution losses.</li><li>Money left at the end scores nothing; it only breaks ties.</li></ul>
     <p class="note">All values are first drafts for playtesting.</p>
   </div></div>`;
 }
@@ -1503,8 +1518,6 @@ document.addEventListener('click', e=>{
     case 'jointWith': if(UI.joint) proposeJoint(UI.joint.type,+el.dataset.p,UI.joint.tile); break;
     case 'pump': pump(UI.pumpN); UI.alloc=null; save(); break;
     case 'sell': sellWater(UI.sellN); UI.alloc=null; save(); break;
-    case 'deposit': deposit(UI.bankN); save(); break;
-    case 'withdraw': withdraw(UI.bankN); save(); break;
     case 'tradeTo': UI.trade={to:+el.dataset.p,gm:0,gw:0,rm:0,rw:0}; break;
     case 'proposeTrade': proposeTrade(); break;
     case 'accept': acceptPending(); UI.alloc=null; save(); break;

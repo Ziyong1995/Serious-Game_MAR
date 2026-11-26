@@ -29,7 +29,10 @@ function execute(state, pid, command) {
       case 'build': { const t=validType(command.type); integer(command.tile,p.land.length-1); requireValue(canBuildOn(pid,t,command.tile),'This structure cannot be built on that tile.'); requireValue(p.money>=costFor(t,1),'Not enough money.'); build(t,command.tile); break; }
       case 'swapObj': {
         integer(command.uid); requireValue(p.objectives.some(o=>o.uid===command.uid),'This is not your objective.');
-        requireValue(!p.r.swapped && p.money>=2,'You may swap once per turn for 2 M.'); swapObjective(command.uid); break;
+        requireValue(!p.r.swapped && p.money>=2,'You may swap once per turn for 2 M.');
+        swapObjective(command.uid);
+        requireValue(p.r.swapped,'No other objective fits your catchment right now. You keep this one and your money.');
+        break;
       }
       case 'upgrade': {
         integer(command.id); const s=G.structs.find(s=>s.id===command.id);
@@ -39,8 +42,6 @@ function execute(state, pid, command) {
       }
       case 'pump': integer(command.n); requireValue(command.n>0 && command.n<=pumpLimit(p),'Exceeds available pumping capacity.'); pump(command.n); break;
       case 'sell': integer(command.n); requireValue(command.n>0 && command.n<=p.water,'Not enough water.'); sellWater(command.n); break;
-      case 'deposit': integer(command.n); requireValue(command.n>0 && command.n<=p.money,'Not enough money.'); deposit(command.n); break;
-      case 'withdraw': integer(command.n); requireValue(command.n>0 && command.n<=p.bank,'Not enough savings.'); withdraw(command.n); break;
       case 'proposeTrade': {
         const t=command.trade; requireValue(t && typeof t==='object','Invalid trade.'); target(t.to,pid);
         for(const k of ['gm','gw','rm','rw']) integer(t[k]);
@@ -71,7 +72,11 @@ function execute(state, pid, command) {
     }
   }
   requireValue(Number.isSafeInteger(G.aquifer) && G.aquifer>=0 && G.aquifer<=G.aqMax,'Invalid aquifer balance.');
-  for(const p of G.players) for(const key of ['money','water','bank']) requireValue(Number.isSafeInteger(p[key]) && p[key]>=0,'Invalid resource balance.');
+  for(const p of G.players) {
+    for(const key of ['money','water']) {
+      requireValue(Number.isSafeInteger(p[key]) && p[key]>=0,'Invalid resource balance.');
+    }
+  }
   const occupied=new Set();
   for(const s of G.structs){ const key=s.host+':'+s.tile; requireValue(!occupied.has(key)&&Number.isInteger(s.tile)&&s.tile>=0&&s.tile<P(s.host).land.length&&landOk(s.type,P(s.host).land[s.tile]),'Invalid structure placement.'); occupied.add(key); }
   for(const p of G.players) requireValue(wellsHosted(p.id)<=2,'Too many wells in one catchment.');
